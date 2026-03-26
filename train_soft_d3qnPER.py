@@ -1,47 +1,3 @@
-"""Offline trainer: Double DQN + replay buffer (CPU) for OBELIX.
-
-Run locally to create weights.pth, then submit agent.py + weights.pth.
-
-Example:
-  python train_dqn.py --obelix_py ./obelix.py --out weights.pth --episodes 2000 --difficulty 0 --wall_obstacles
-
-                        ALGORITHM: DOUBLE DEEP Q-NETWORK (DDQN)
-
-
-Double DQN is one of the most widely used and reliable improvements over the original Deep Q-Network (DQN).
-
-Main problems it solves:
-Vanilla DQN often overestimates true action values.
-This happens because the same network is used twice:
-   1. to pick the best-looking action in the next state (max)
-   2. to evaluate how good that action actually is
-
-When Q-values are noisy (which they almost always are early in training),
-this double usage creates optimistic bias → the agent thinks some
-actions are much better than they really are → leads to unstable learning.
-
-Double DQN solution:
-Split the responsibilities:
-• Use the online / main Q-network  to SELECT which action looks best
-• Use the target Q-network to EVALUATE (give the actual value)
-
-So instead of:
-
-    target = r + γ × max_a Q_target(s', a)
-
-We do:
-
-    target = r + γ × Q_target( s',   argmax_a Q_online(s', a)   )
-
-This small change dramatically reduces overestimation and makes learning
-much more stable — especially in environments with large action spaces
-or noisy rewards.
-
-For More Details please refer to https://arxiv.org/pdf/1509.06461 .
-
-
-"""
-
 from __future__ import annotations
 import argparse, random
 from collections import deque
@@ -55,23 +11,22 @@ import torch.optim as optim
 
 from reward_wrapper import RewardWrapper
 
+# usage: python train_soft_d3qnPER.py --obelix_py obelix.py --wall_obstacles --difficulty 2
+
 ACTIONS = ["L45", "L22", "FW", "R22", "R45"]
 
 class D3QN(nn.Module):
     def __init__(self, in_dim=18, n_actions=5):
         super().__init__()
-        # shared feature extractor
         self.feature = nn.Sequential(
             nn.Linear(in_dim, 64),
             nn.ReLU(),
         )
-        # value stream
         self.value = nn.Sequential(
             nn.Linear(64, 64),
             nn.ReLU(),
             nn.Linear(64, 1)
         )
-        # advantage stream
         self.advantage = nn.Sequential(
             nn.Linear(64, 64),
             nn.ReLU(),
@@ -79,12 +34,9 @@ class D3QN(nn.Module):
         )
     def forward(self, x):
         f = self.feature(x)
-        v = self.value(f)                 
-        a = self.advantage(f)             
-        # combine streams
-        q = v + a - a.mean(dim=1, keepdim=True)
-
-        return q
+        v = self.value(f)
+        a = self.advantage(f)
+        return v + a - a.mean(dim=1, keepdim=True)
 
 @dataclass
 class Transition:
@@ -94,21 +46,49 @@ class Transition:
     s2: np.ndarray
     done: bool
 
-class Replay:
-    def __init__(self, cap: int = 100_000):
-        self.buf: Deque[Transition] = deque(maxlen=cap)
+class PERReplay:
+    def __init__(self, cap=100000, alpha=0.6):
+        self.cap = cap
+        self.alpha = alpha
+        self.buf = []
+        self.priorities = np.zeros((cap,), dtype=np.float32)
+        self.pos = 0
+
     def add(self, t: Transition):
-        self.buf.append(t)
-    def sample(self, batch: int):
-        idx = np.random.choice(len(self.buf), size=batch, replace=False)
+        max_prio = self.priorities.max() if self.buf else 1.0
+        if len(self.buf) < self.cap:
+            self.buf.append(t)
+        else:
+            self.buf[self.pos] = t
+        self.priorities[self.pos] = max_prio
+        self.pos = (self.pos + 1) % self.cap
+
+    def sample(self, batch, beta=0.4):
+        prios = self.priorities[:len(self.buf)]
+        probs = prios ** self.alpha
+        probs /= probs.sum()
+
+        idx = np.random.choice(len(self.buf), batch, p=probs)
         items = [self.buf[i] for i in idx]
+
         s = np.stack([it.s for it in items]).astype(np.float32)
         a = np.array([it.a for it in items], dtype=np.int64)
         r = np.array([it.r for it in items], dtype=np.float32)
         s2 = np.stack([it.s2 for it in items]).astype(np.float32)
         d = np.array([it.done for it in items], dtype=np.float32)
-        return s, a, r, s2, d
-    def __len__(self): return len(self.buf)
+
+        weights = (len(self.buf) * probs[idx]) ** (-beta)
+        weights /= weights.max()
+        weights = weights.astype(np.float32)
+
+        return s, a, r, s2, d, idx, weights
+
+    def update_priorities(self, idx, prios):
+        for i, p in zip(idx, prios):
+            self.priorities[i] = p
+
+    def __len__(self):
+        return len(self.buf)
 
 def import_obelix(obelix_py: str):
     import importlib.util
@@ -134,11 +114,15 @@ def main():
     ap.add_argument("--batch", type=int, default=256)
     ap.add_argument("--replay", type=int, default=100000)
     ap.add_argument("--warmup", type=int, default=2000)
-    ap.add_argument("--target_sync", type=int, default=2000)
     ap.add_argument("--eps_start", type=float, default=1.0)
-    ap.add_argument("--eps_end", type=float, default=0.01)
+    ap.add_argument("--eps_end", type=float, default=0.05)
     ap.add_argument("--eps_decay_steps", type=int, default=800000)
     ap.add_argument("--seed", type=int, default=0)
+
+    ap.add_argument("--alpha", type=float, default=0.6)
+    ap.add_argument("--beta_start", type=float, default=0.4)
+    ap.add_argument("--beta_frames", type=int, default=1000000)
+
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -153,7 +137,8 @@ def main():
     tgt.eval()
 
     opt = optim.Adam(q.parameters(), lr=args.lr)
-    replay = Replay(args.replay)
+    replay = PERReplay(args.replay, args.alpha)
+
     steps = 0
 
     def eps_by_step(t):
@@ -161,6 +146,9 @@ def main():
             return args.eps_end
         frac = t / args.eps_decay_steps
         return args.eps_start + frac * (args.eps_end - args.eps_start)
+
+    def beta_by_step(t):
+        return min(1.0, args.beta_start + t * (1.0 - args.beta_start) / args.beta_frames)
 
     for ep in range(args.episodes):
         base_env = OBELIX(
@@ -187,17 +175,21 @@ def main():
 
             s2, r, done = env.step(ACTIONS[a], render=False)
             ep_ret += float(r)
+
             replay.add(Transition(s=s, a=a, r=float(r), s2=s2, done=bool(done)))
             s = s2
             steps += 1
 
             if len(replay) >= max(args.warmup, args.batch):
-                sb, ab, rb, s2b, db = replay.sample(args.batch)
+                beta = beta_by_step(steps)
+                sb, ab, rb, s2b, db, idx, w = replay.sample(args.batch, beta)
+
                 sb_t = torch.tensor(sb)
                 ab_t = torch.tensor(ab)
                 rb_t = torch.tensor(rb)
                 s2b_t = torch.tensor(s2b)
                 db_t = torch.tensor(db)
+                w_t = torch.tensor(w)
 
                 with torch.no_grad():
                     next_q = q(s2b_t)
@@ -207,17 +199,21 @@ def main():
                     y = rb_t + args.gamma * (1.0 - db_t) * next_val
 
                 pred = q(sb_t).gather(1, ab_t.unsqueeze(1)).squeeze(1)
-                loss = nn.functional.smooth_l1_loss(pred, y)
+                td_error = (pred - y).detach().abs().numpy()
+
+                loss = (w_t * (pred - y) ** 2).mean()
 
                 opt.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(q.parameters(), 5.0)
                 opt.step()
 
+                replay.update_priorities(idx, td_error + 1e-5)
 
-                tau = 0.005  # try 0.005–0.01
+                tau = 0.005
                 for target_param, param in zip(tgt.parameters(), q.parameters()):
                     target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+
             if done:
                 break
 
