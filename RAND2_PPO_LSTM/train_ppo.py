@@ -1,3 +1,4 @@
+print("Importing libraries...")
 import argparse
 import numpy as np
 import torch
@@ -6,8 +7,10 @@ import torch.optim as optim
 
 from reward_wrapper import RewardWrapper
 
-ACTIONS = ["L45", "L22", "FW", "R22", "R45"]
+# usage : python train_ppo.py --obelix_py obelix.py --difficulty 2 --wall_obstacles
 
+ACTIONS = ["L45", "L22", "FW", "R22", "R45"]
+print("Initializing classes...")
 # =========================
 # Policy + Value Network
 # =========================
@@ -58,10 +61,11 @@ def compute_gae(rewards, values, dones, gamma=0.99, lam=0.95):
 # =========================
 # Main Training
 # =========================
+print("Starting main training...")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--obelix_py", type=str, required=True)
-    parser.add_argument("--episodes", type=int, default=1000)
+    parser.add_argument("--episodes", type=int, default=800)
     parser.add_argument("--max_steps", type=int, default=1000)
     parser.add_argument("--difficulty", type=int, default=3)
     parser.add_argument("--wall_obstacles", action="store_true")
@@ -81,8 +85,9 @@ def main():
     agent = PPOAgent()
     optimizer = optim.Adam(agent.parameters(), lr=args.lr)
     best_reward = -1e9
+    print("Starting training...")
     for ep in range(args.episodes):
-
+        print(f"Running episode: {ep+1}")
         env = RewardWrapper(OBELIX(
             scaling_factor=5,
             arena_size=500,
@@ -131,7 +136,7 @@ def main():
 
         # normalize advantage
         adv = (adv - adv.mean()) / (adv.std() + 1e-8)
-
+        
         # ===== PPO UPDATE =====
         for _ in range(args.epochs):
             logits, values_pred = agent(states)

@@ -3,9 +3,34 @@ import numpy as np
 import torch
 from obelix import OBELIX
 from agent_ppo import PPOAgent
+import torch.nn as nn
 
 ACTIONS = ["L45", "L22", "FW", "R22", "R45"]
 
+class PPOAgent(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.shared = nn.Sequential(
+            nn.Linear(18, 64),
+            nn.Tanh(),
+        )
+
+        self.policy = nn.Sequential(
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, 5)
+        )
+
+        self.value = nn.Sequential(   # ADD THIS
+            nn.Linear(64, 64),
+            nn.Tanh(),
+            nn.Linear(64, 1)
+        )
+
+    def forward(self, x):
+        x = self.shared(x)
+        return self.policy(x)  # ignore value at inference
+    
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", type=str, default="ppo_weights.pth")
@@ -35,8 +60,10 @@ def main():
         env.render_frame()
 
         x = torch.tensor(state, dtype=torch.float32).unsqueeze(0)
-        logits = model(x)
-        probs = torch.softmax(logits, dim=-1).numpy()[0]
+
+        with torch.no_grad():
+            logits = model(x)
+            probs = torch.softmax(logits, dim=-1).numpy()[0]
 
         action = int(rng.choice(len(ACTIONS), p=probs))
 
