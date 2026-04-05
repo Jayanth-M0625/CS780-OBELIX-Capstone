@@ -18,11 +18,29 @@ def load_env(obelix_path):
 # =========================================================
 # Load agent policy dynamically
 # =========================================================
-def load_policy(agent_path):
+def load_policy(agent_path, weights_path):
     spec = importlib.util.spec_from_file_location("agent_module", agent_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.policy
+
+    # CASE 1: clean agent with load()
+    if hasattr(module, "load"):
+        module.load(weights_path)
+        return module.policy
+
+    # CASE 2: submission-style agent (no load function)
+    else:
+        import os
+        import shutil
+
+        # Copy weights to expected filename
+        agent_dir = os.path.dirname(agent_path)
+        target_path = os.path.join(agent_dir, "weights.pth")
+
+        if weights_path != target_path:
+            shutil.copy(weights_path, target_path)
+
+        return module.policy
 
 
 # =========================================================
@@ -37,6 +55,7 @@ def evaluate_with_metrics(env_class, policy_fn, args):
     }
 
     for i in range(args.runs):
+        print(f"Running run: {i+1}")
         env = env_class(
             scaling_factor=args.scaling_factor,
             arena_size=args.arena_size,
@@ -111,12 +130,12 @@ if __name__ == "__main__":
 
     parser.add_argument("--obelix", type=str, required=True)
     parser.add_argument("--agent", type=str, required=True)
-
+    parser.add_argument("--weights", type=str, required=True)
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--difficulty", type=int, default=3)
     parser.add_argument("--wall_obstacles", action="store_true")
 
-    parser.add_argument("--max_steps", type=int, default=1000)
+    parser.add_argument("--max_steps", type=int, default=2000)
     parser.add_argument("--box_speed", type=int, default=2)
     parser.add_argument("--scaling_factor", type=int, default=5)
     parser.add_argument("--arena_size", type=int, default=500)
@@ -125,7 +144,7 @@ if __name__ == "__main__":
 
     # Load dynamically
     OBELIX = load_env(args.obelix)
-    policy_fn = load_policy(args.agent)
+    policy_fn = load_policy(args.agent, args.weights)
 
     # Evaluate
     results = evaluate_with_metrics(OBELIX, policy_fn, args)

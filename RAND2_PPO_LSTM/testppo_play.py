@@ -5,6 +5,8 @@ from obelix import OBELIX
 from agent_ppo import PPOAgent
 import torch.nn as nn
 
+# usage: python testppo_play.py --weights ppo_weights.pth --difficulty 2 --wall_obstacles 
+
 ACTIONS = ["L45", "L22", "FW", "R22", "R45"]
 
 class PPOAgent(nn.Module):

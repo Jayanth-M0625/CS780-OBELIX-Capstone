@@ -17,6 +17,7 @@ class PPO_LSTM(nn.Module):
         self.fc = nn.Linear(18, 64)
         self.lstm = nn.LSTM(64, 64, batch_first=True)
         self.policy = nn.Linear(64, 5)
+        self.value = nn.Linear(64, 1) 
 
     def forward(self, x, hx, cx):
         x = torch.tanh(self.fc(x))

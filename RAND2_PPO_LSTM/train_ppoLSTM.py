@@ -7,7 +7,7 @@ import torch.optim as optim
 
 from reward_wrapper import RewardWrapper
 
-# usage: python train_ppo_lstm.py --obelix_py obelix.py --difficulty 3 --wall_obstacles
+# usage: python train_ppoLSTM.py --obelix_py obelix.py --difficulty 3 --wall_obstacles
 
 ACTIONS = ["L45", "L22", "FW", "R22", "R45"]
 print("Initializing classes...")
@@ -92,8 +92,8 @@ def main():
             near_left  = state[[12,14]]
             ir = state[16]
             any_signal = (np.sum(near_right)+np.sum(near_front)+np.sum(near_left)+ir) > 0
-            if not any_signal:
-                logits[0,2] += 1.0   # bias FW
+            if ep<200 and not any_signal:
+                logits[0,2] += 0.2   # bias FW action intially for exploration
             probs = torch.softmax(logits, dim=-1)
             dist = torch.distributions.Categorical(probs)
             action = dist.sample()
@@ -127,7 +127,9 @@ def main():
         surr2 = torch.clamp(ratio, 0.8, 1.2) * adv
         policy_loss = -torch.min(surr1, surr2).mean()
         value_loss = ((returns - values_pred.squeeze())**2).mean()
-        loss = policy_loss + 0.5 * value_loss
+        entropy = dist.entropy().mean()
+        beta = max(0.01 * (1 - ep / 1500), 0.001) # decaying beta
+        loss = policy_loss + 0.5 * value_loss - beta * entropy
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
