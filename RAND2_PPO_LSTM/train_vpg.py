@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from reward_wrapper import RewardWrapper
 
+# usage: python train_vpg.py --obelix_py obelix.py 
 
 ACTIONS = ["L45", "L22", "FW", "R22", "R45"]
 print("Initializing classes...")
@@ -36,7 +37,7 @@ print("Starting main training...")
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--obelix_py", type=str, required=True)
-    parser.add_argument("--episodes", type=int, default=1000)
+    parser.add_argument("--episodes", type=int, default=2000)
     parser.add_argument("--difficulty", type=int, default=3)
     parser.add_argument("--wall_obstacles", action="store_true")
     args = parser.parse_args()
@@ -49,7 +50,7 @@ def main():
 
     model = VPG()
     optimizer = optim.Adam(model.parameters(), lr=3e-4)
-    beta_start = 0.01
+    beta_start = 0.05
     beta_end = 0.001
     gamma = 0.99
     print("Starting training...")
