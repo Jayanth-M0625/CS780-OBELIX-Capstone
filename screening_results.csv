@@ -1,0 +1,3 @@
+agent_script,weight_file,mean_reward,success_rate
+agent_drqn.py,weights_drqn.pth,-153375.6,0.1
+agent_d3qn.py,weights_d3qn.pth,-39037.7,0.0
